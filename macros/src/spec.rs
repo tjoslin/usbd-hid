@@ -4,7 +4,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{parse, Attribute, Expr, ExprAssign, ExprPath, Path, Result, Token};
-use syn::{Block, ExprBlock, ExprLit, ExprTuple, Lit, Stmt};
+use syn::{Block, ExprBlock, ExprLit, ExprTuple, Lit, Meta, Stmt};
 
 use alloc::{
     borrow::ToOwned,
@@ -324,9 +324,9 @@ fn parse_group_spec(input: ParseStream, field: Expr) -> Result<GroupSpec> {
         }) = *right
         {
             for stmt in stmts {
-                if let Stmt::Expr(e) = stmt {
+                if let Stmt::Expr(e, None) = stmt {
                     out.from_field(input, e)?;
-                } else if let Stmt::Semi(e, _) = stmt {
+                } else if let Stmt::Expr(e, Some(_)) = stmt {
                     out.from_field(input, e)?;
                 } else {
                     return Err(parse::Error::new(input.span(), "`#[gen_hid_descriptor]` group spec body can only contain semicolon-separated fields"));
@@ -369,13 +369,15 @@ fn parse_item_attrs(attrs: Vec<Attribute>) -> (Option<MainItemSetting>, Option<u
     };
 
     for attr in attrs {
-        match attr.path.segments[0].ident.to_string().as_str() {
+        match attr.path().segments[0].ident.to_string().as_str() {
             "packed_bits" => {
-                for tok in attr.tokens {
-                    if let proc_macro2::TokenTree::Literal(lit) = tok {
-                        if let Ok(num) = lit.to_string().parse::<u16>() {
-                            packed_bits = Some(num);
-                            break;
+                if let Meta::List(meta) = attr.meta {
+                    for tok in meta.tokens {
+                        if let proc_macro2::TokenTree::Literal(lit) = tok {
+                            if let Ok(num) = lit.to_string().parse::<u16>() {
+                                packed_bits = Some(num);
+                                break;
+                            }
                         }
                     }
                 }
@@ -386,44 +388,48 @@ fn parse_item_attrs(attrs: Vec<Attribute>) -> (Option<MainItemSetting>, Option<u
 
             "item_settings" => {
                 had_settings = true;
-                for setting in attr.tokens {
-                    if let proc_macro2::TokenTree::Ident(id) = setting {
-                        match id.to_string().as_str() {
-                            "constant" => out.set_constant(true),
-                            "data" => out.set_constant(false),
+                if let Meta::List(meta) = attr.meta {
+                    for setting in meta.tokens {
+                        if let proc_macro2::TokenTree::Ident(id) = setting {
+                            match id.to_string().as_str() {
+                                "constant" => out.set_constant(true),
+                                "data" => out.set_constant(false),
 
-                            "variable" => out.set_variable(true),
-                            "array" => out.set_variable(false),
+                                "variable" => out.set_variable(true),
+                                "array" => out.set_variable(false),
 
-                            "relative" => out.set_relative(true),
-                            "absolute" => out.set_relative(false),
+                                "relative" => out.set_relative(true),
+                                "absolute" => out.set_relative(false),
 
-                            "wrap" => out.set_wrap(true),
-                            "no_wrap" => out.set_wrap(false),
+                                "wrap" => out.set_wrap(true),
+                                "no_wrap" => out.set_wrap(false),
 
-                            "non_linear" => out.set_non_linear(true),
-                            "linear" => out.set_non_linear(false),
+                                "non_linear" => out.set_non_linear(true),
+                                "linear" => out.set_non_linear(false),
 
-                            "no_preferred" => out.set_no_preferred_state(true),
-                            "preferred" => out.set_no_preferred_state(false),
+                                "no_preferred" => out.set_no_preferred_state(true),
+                                "preferred" => out.set_no_preferred_state(false),
 
-                            "null" => out.set_has_null_state(true),
-                            "not_null" => out.set_has_null_state(false),
+                                "null" => out.set_has_null_state(true),
+                                "not_null" => out.set_has_null_state(false),
 
-                            "volatile" => out.set_volatile(true),
-                            "not_volatile" => out.set_volatile(false),
-                            p => log::warn!("Unknown item_settings parameter: {p}"),
+                                "volatile" => out.set_volatile(true),
+                                "not_volatile" => out.set_volatile(false),
+                                p => log::warn!("Unknown item_settings parameter: {p}"),
+                            }
                         }
                     }
                 }
             }
 
             "quirks" => {
-                for setting in attr.tokens {
-                    if let proc_macro2::TokenTree::Ident(id) = setting {
-                        match id.to_string().as_str() {
-                            "allow_short" => quirks.allow_short_form = true,
-                            p => log::warn!("Unknown item_settings parameter: {p}"),
+                if let Meta::List(meta) = attr.meta {
+                    for setting in meta.tokens {
+                        if let proc_macro2::TokenTree::Ident(id) = setting {
+                            match id.to_string().as_str() {
+                                "allow_short" => quirks.allow_short_form = true,
+                                p => log::warn!("Unknown item_settings parameter: {p}"),
+                            }
                         }
                     }
                 }
@@ -521,7 +527,7 @@ impl Parse for GroupSpec {
         let mut out = GroupSpec {
             ..Default::default()
         };
-        let fields: Punctuated<Expr, Token![,]> = input.parse_terminated(Expr::parse)?;
+        let fields: Punctuated<Expr, Token![,]> = input.parse_terminated(Expr::parse, Token![,])?;
         if fields.is_empty() {
             return Err(parse::Error::new(
                 input.span(),
